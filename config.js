@@ -25,45 +25,14 @@ export default {
       anoFimInput: '#formResultado\\:anoFim_input',
       consultarButton: '#formResultado\\:btnConsultar',
 
-      // Indicadores e tabela de resultado
-      loadingIndicator: '.ui-datatable-loading, .ui-overlay-visible',
-      resultTable: '#formResultado\\:dataTablePrecat',
-      resultRows: '#formResultado\\:dataTablePrecat_data tr',
-
-      // Paginação
-      paginatorSelection: '#formResultado\\:dataTablePrecat_rppDD',
-      paginatorCurrent:
-        '#formResultado\\:dataTablePrecat_paginator_bottom .ui-paginator-current',
-      nextPageButton:
-        '#formResultado\\:dataTablePrecat_paginator_bottom .ui-paginator-next',
-
-      // Diálogo de detalhes do precatório
+      // Tabela de resultados e paginação
+      resultTable: '.ui-datatable',
+      paginatorCurrent: '.ui-paginator-current',
+      paginatorSelection: '#formResultado\\:listView_rppDD',
+      nextPageButton: '.ui-paginator-next',
+      loadingIndicator: '.ui-state-loading-indicator', // Configuração do AJAX
       dialogDetalhe: '.ui-dialog-content',
-      valorFaceLabel: 'span[id$="valorFace_label"]',
-      dataAtualizacaoValorFaceLabel: 'span[id$="dataAtualizacaoValorFace_label"]',
-      acaoLabel: 'span[id$="acao_label"]',
-      fecharDialogButton: 'button[title="Fechar"]',
-    },
-
-    // Se ainda estiver usando scraping do PJE
-    pje: {
-      livreRadioButton: '#fPP\\:cbPesquisaLivre',
-      processoInput: '#fPP\\:numeroProcesso:input',
-      verDetalhesLink: 'a[onclick*="listView.seam"]',
+      fecharDialogButton: '.close-dialog-button',
     },
   },
-
-  // 🧱 Colunas da tabela de resultados
-  columns: [
-    'enteDevedor',
-    'precatorio',
-    'natureza',
-    'nSei',
-    'dataProtocolo',
-    'dataLiquidacao',
-    'credor',
-    'situacao',
-    'numeroProcessoExecucao',
-    'empty',
-  ],
 };
