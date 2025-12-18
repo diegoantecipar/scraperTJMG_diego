@@ -1,0 +1,50 @@
+{
+	"name": "tjmg-pje-scraper",
+	"version": "1.0.0",
+	"description": "Script para extrair dados do TJMG e do PJE",
+	"main": "index.js",
+	"type": "module",
+	"homepage": "./views/dist",
+	"scripts": {
+		"seed": "node ./database/seed.js",
+		"migrate": "prisma migrate dev",
+		"workers": "node ./queue/index.js",
+		"workers:dev": "nodemon ./queue/index.js",
+		"start": "concurrently \"cross-env NODE_ENV=production node index.js\" \"cross-env NODE_ENV=production node ./queue/index.js\"",
+		"start:pm2": "pm2 start ecosystem.config.cjs --env production",
+		"dev": "concurrently \"cross-env NODE_ENV=development nodemon index.js\" \"vite\"",
+		"build": "vite build",
+		"build:prod": "cross-env NODE_ENV=production vite build",
+		"start:prod": "cross-env NODE_ENV=production node index.js",
+		"workers:prod": "cross-env NODE_ENV=production node ./queue/index.js"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"dependencies": {
+		"@prisma/client": "^6.19.0",
+		"@tailwindcss/vite": "^4.1.11",
+		"@tanstack/react-query": "^5.81.5",
+		"axios": "^1.9.0",
+		"bullmq": "^5.56.1",
+		"cors": "^2.8.5",
+		"ejs": "^3.1.10",
+		"express": "^5.1.0",
+		"fs-extra": "^11.3.0",
+		"puppeteer": "^24.10.0",
+		"puppeteer-extra": "^3.3.6",
+		"puppeteer-extra-plugin-stealth": "^2.11.2",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
+		"sqlite3": "^5.1.7",
+		"tailwindcss": "^4.1.11"
+	},
+	"devDependencies": {
+		"@vitejs/plugin-react": "^4.6.0",
+		"concurrently": "^9.2.1",
+		"cross-env": "^7.0.3",
+		"nodemon": "^3.1.11",
+		"prisma": "^6.19.0",
+		"vite": "^7.0.2"
+	}
+}

@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+output/*
+.git
+.gitignore
+.env
+*.md
+*.pdf
+Dockerfile
+README.md
+README.pdf

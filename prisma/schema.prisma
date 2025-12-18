@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+model JsonFile {
+  id        Int      @id @default(autoincrement())
+  name      String
+  path      String
+  createdAt DateTime @default(now())
+  exportId  Int
+  export    Export   @relation(fields: [exportId], references: [id], onDelete: Cascade)
+
+  @@map("json_files")
+}
+
+model Export {
+  id         Int           @id @default(autoincrement())
+  entity     String
+  yearStart  Int
+  yearEnd    Int
+  maxPages   Int?
+  hideClosed Boolean?
+  headless   Boolean?
+  complete   Boolean       @default(false)
+  jsonFiles  JsonFile[]  
+  failures   Failure[]     
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt 
+  totalPages   Int?         
+  processErrors ProcessError[] 
+
+  @@map("exports")
+}
+
+model Failure {
+  id        Int      @id @default(autoincrement())
+  page      Int?
+  reason    String
+  exportId  Int
+  createdAt DateTime @default(now())
+  attempts  Int      @default(0)
+  export    Export   @relation(fields: [exportId], references: [id])
+
+  @@map("failures")
+}
+
+model ProcessError {
+  id        Int      @id @default(autoincrement())
+  message   String
+  stack     String?
+  exportId  Int
+  createdAt DateTime @default(now())
+  export    Export   @relation(fields: [exportId], references: [id])
+
+  @@map("process_errors")
+}
