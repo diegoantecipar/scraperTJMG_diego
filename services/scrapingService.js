@@ -6,7 +6,76 @@ import { QueueService } from "./queueService.js";
 import { JOB_NAMES } from "../queue/workers.js";
 
 export class ScrapingService {
+
 	/** Correção da função de extração dos detalhes de precatórios, ajustada com selectors do novo layout. */
+
+	/**
+	 * Espera PrimeFaces/JSF ficar "idle" (overlay/blockUI sumir + pequeno respiro).
+	 */
+	static async waitPrimeFacesIdle(page, mergedConfig, timeout = 60000) {
+		const sel = mergedConfig?.selectors?.tjmg?.loadingIndicator;
+		if (!sel) {
+			await page.waitForTimeout(250);
+			return;
+		}
+
+		try {
+			// pode não aparecer; ok
+			await page.waitForSelector(sel, { timeout: 1500 });
+			// se apareceu, espera sumir
+			await page.waitForSelector(sel, { hidden: true, timeout });
+		} catch {
+			// overlay pode não existir nesse momento
+		}
+
+		await page.waitForTimeout(250);
+	}
+
+	/**
+	 * Seleciona o autocomplete por texto (PrimeFaces).
+	 * Evita clicar "qualquer" sugestão e melhora estabilidade.
+	 */
+	static async pickAutocompleteByText(page, inputSelector, itemSelector, text) {
+		if (!text) throw new Error("Autocomplete: texto vazio.");
+
+		await page.waitForSelector(inputSelector, { visible: true, timeout: 60000 });
+		await page.click(inputSelector, { clickCount: 3 });
+		await page.type(inputSelector, text, { delay: 30 });
+
+		// Aguarda lista de sugestões
+		await page.waitForSelector(itemSelector, { visible: true, timeout: 60000 });
+
+		const clicked = await page.evaluate(
+			({ itemSelector, text }) => {
+				const items = Array.from(document.querySelectorAll(itemSelector));
+				const norm = (s) => (s || "").trim().toLowerCase();
+				const target = norm(text);
+
+				// 1) match exato
+				let chosen =
+					items.find((el) => norm(el.textContent) === target) ||
+					// 2) contains
+					items.find((el) => norm(el.textContent).includes(target)) ||
+					// 3) fallback: primeiro
+					items[0];
+
+				if (!chosen) return false;
+				chosen.scrollIntoView({ block: "center" });
+				chosen.click();
+				return true;
+			},
+			{ itemSelector, text },
+		);
+
+		if (!clicked) {
+			throw new Error(`Autocomplete: nenhuma sugestão encontrada para "${text}"`);
+		}
+	}
+
+	/**
+	 * Extrai detalhes do precatório na página do TJMG (valor, ação, etc).
+	 */
+
 	static async extractPrecatorioDetails(page, precatorio, config) {
 		if (!precatorio.precatorioLinkId) {
 			console.warn(`Precatório ${precatorio.codigo} não possui ID de link. Pulando detalhes.`);
@@ -35,7 +104,22 @@ export class ScrapingService {
 		Object.assign(precatorio, detalhes);
 
 		console.log(`Fechando o diálogo de detalhes para o precatório ${precatorio.codigo}...`);
-		await page.click(config.selectors.tjmg.fecharDialogButton);
+
+		// Fecha via PrimeFaces widget (mais estável). Se não existir, fallback no seletor.
+		const closedByWidget = await page.evaluate(() => {
+			try {
+				if (window.PF && PF("widgetDialogDetalhe")) {
+					PF("widgetDialogDetalhe").hide();
+					return true;
+				}
+			} catch {}
+			return false;
+		});
+
+		if (!closedByWidget && config.selectors.tjmg.fecharDialogButton) {
+			await page.click(config.selectors.tjmg.fecharDialogButton);
+		}
+
 		await page.waitForSelector(config.selectors.tjmg.dialogDetalhe, { hidden: true });
 		await randomDelay(config.humanBehavior.minDelay, config.humanBehavior.maxDelay);
 
@@ -73,7 +157,8 @@ export class ScrapingService {
 
 			if (progressCallback) progressCallback({ etapa: "navegando", pageNumber });
 			console.log(`Navegando para ${mergedConfig.urls.tjmg}`);
-			await page.goto(mergedConfig.urls.tjmg, { waitUntil: "networkidle2" });
+			await page.goto(mergedConfig.urls.tjmg, { waitUntil: "domcontentloaded" });
+
 
 			// Preenchimento da entidade devedora
 			if (progressCallback) progressCallback({ etapa: "preenchendo entidade", pageNumber });
@@ -94,20 +179,50 @@ export class ScrapingService {
 					(selector, value) => {
 						document.querySelector(selector).value = value;
 					},
+
+			// Entidade (autocomplete)
+			if (progressCallback) progressCallback({ etapa: "preenchendo entidade", pageNumber });
+			await ScrapingService.pickAutocompleteByText(
+				page,
+				mergedConfig.selectors.tjmg.entidadeInput,
+				mergedConfig.selectors.tjmg.entidadeSuggestion,
+				mergedConfig.consulta.entidade,
+			);
+			await randomDelay(400, 900);
+
+			// Ano início
+			if (mergedConfig.consulta.anoInicio) {
+				if (progressCallback) progressCallback({ etapa: "preenchendo anoInicio", pageNumber });
+				await page.waitForSelector(mergedConfig.selectors.tjmg.anoInicioInput, { visible: true, timeout: 60000 });
+				await page.click(mergedConfig.selectors.tjmg.anoInicioInput, { clickCount: 3 });
+				await page.type(
+
 					mergedConfig.selectors.tjmg.anoInicioInput,
-					mergedConfig.consulta.anoInicio,
+					String(mergedConfig.consulta.anoInicio),
+					{ delay: 10 },
 				);
 			}
+
 
 			if (mergedConfig.consulta.anoFim) {
 				await page.evaluate(
 					(selector, value) => {
 						document.querySelector(selector).value = value;
 					},
+
+			// Ano fim
+			if (mergedConfig.consulta.anoFim) {
+				if (progressCallback) progressCallback({ etapa: "preenchendo anoFim", pageNumber });
+				await page.waitForSelector(mergedConfig.selectors.tjmg.anoFimInput, { visible: true, timeout: 60000 });
+				await page.click(mergedConfig.selectors.tjmg.anoFimInput, { clickCount: 3 });
+				await page.type(
+
 					mergedConfig.selectors.tjmg.anoFimInput,
-					mergedConfig.consulta.anoFim,
+					String(mergedConfig.consulta.anoFim),
+					{ delay: 10 },
 				);
 			}
+
 
 			// Consultar resultados
 			if (progressCallback) progressCallback({ etapa: "consultando", pageNumber });
@@ -117,6 +232,146 @@ export class ScrapingService {
 			await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, { timeout: 20000 });
 
 			console.log("Tabela carregada.");
+
+			// Consultar (NÃO usar Enter)
+			if (progressCallback) progressCallback({ etapa: "consultando", pageNumber });
+			console.log("Clicando no botão Consultar");
+			await page.waitForSelector(mergedConfig.selectors.tjmg.consultarButton, { visible: true, timeout: 60000 });
+			await page.click(mergedConfig.selectors.tjmg.consultarButton);
+
+			// Esperar resultados
+			if (progressCallback) progressCallback({ etapa: "aguardando resultados", pageNumber });
+			console.log("Aguardando o carregamento dos resultados...");
+			await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, { visible: true, timeout: 60000 });
+			console.log("Tabela de resultados carregada com sucesso!");
+
+			// PrimeFaces às vezes re-renderiza após ajustar paginação/resultado
+			console.log("Aguardando renderizações adicionais (se houver)...");
+			await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, { visible: true, timeout: 60000 });
+
+			// Se não for a primeira página, navega até a desejada
+			if (pageNumber > 1) {
+				for (let i = 1; i < pageNumber; i++) {
+					if (progressCallback) progressCallback({ etapa: "indo para próxima página", pageNumber: i + 1 });
+
+					const nextButton = await page.$(mergedConfig.selectors.tjmg.nextPageButton);
+					if (nextButton) {
+						await nextButton.click();
+						await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+						await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, {
+							visible: true,
+							timeout: 60000,
+						});
+						await randomDelay(800, 1400);
+					} else {
+						console.error('ERRO: O botão "Próxima Página" não foi encontrado.');
+						break;
+					}
+				}
+			}
+
+			// Aumenta itens por página, se houver seletor
+			if (await page.$(mergedConfig.selectors.tjmg.paginatorSelection)) {
+				await page.evaluate(
+					(selector, value) => {
+						const el = document.querySelector(selector);
+						if (!el) return;
+						el.value = value;
+						const event = new Event("change", { bubbles: true });
+						el.dispatchEvent(event);
+					},
+					mergedConfig.selectors.tjmg.paginatorSelection,
+					"50",
+				);
+
+				await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			}
+
+			await page.waitForTimeout(800);
+
+			// Extrair linhas
+			if (progressCallback) progressCallback({ etapa: "extraindo linhas", pageNumber });
+
+			pageRowsData = await page.evaluate((columns) => {
+				// IMPORTANTÍSSIMO: ID é prefixado em JSF -> usar ends-with
+				const rows = document.querySelectorAll("table[id$='resultado_data'] tbody tr");
+				const extractedData = [];
+
+				for (const row of rows) {
+					const cells = Array.from(row.querySelectorAll("td"));
+
+					// Seu código comparava igualdade; aqui aceitamos >= para tolerar coluna extra
+					if (cells.length < columns.length) continue;
+
+					const obj = {};
+					columns.forEach((col, idx) => {
+						if (col === "empty") return;
+
+						const cell = cells[idx];
+						if (!cell) return;
+
+						const cellText = cell.textContent.trim() || "";
+
+						if (col === "codigo") {
+							const linkElement = cell.querySelector("a[id$='nprecatorio']");
+							obj[col] = linkElement ? linkElement.textContent.trim() : cellText;
+							obj.precatorioLinkId = linkElement ? linkElement.id : null;
+						} else {
+							obj[col] = cellText;
+						}
+					});
+
+					extractedData.push(obj);
+				}
+
+				return extractedData;
+			}, mergedConfig.columns);
+
+			console.log(`Encontradas ${pageRowsData.length} linhas na página ${pageNumber}.`);
+
+			// Garante exportId nas linhas
+			pageRowsData = pageRowsData.map((r) => ({ ...r, exportId }));
+
+			// Extrair detalhes do precatório
+			if (progressCallback) progressCallback({ etapa: "extraindo detalhes", pageNumber });
+			let detailedData = [];
+
+			for (let rowData of pageRowsData) {
+				try {
+					const details = await ScrapingService.extractPrecatorioDetails(page, rowData, mergedConfig);
+					detailedData.push(details);
+				} catch (error) {
+					const exportRepo = new ExportRepository();
+					await exportRepo.createError(exportId, {
+						message: `Erro ao extrair detalhes do precatório ${rowData.codigo}: ${error.message}`,
+						stack: error.stack,
+					});
+				}
+			}
+
+			// Garante exportId também nos dados detalhados
+			detailedData = detailedData.map((r) => ({ ...r, exportId }));
+
+			// Detalhes PJE
+			if (progressCallback) progressCallback({ etapa: "extraindo detalhes PJE", pageNumber });
+			detailedData = await ScrapingService.fetchPjeDetailsForTjmgRows(
+				exportId,
+				detailedData,
+				browserService,
+				progressCallback,
+				mergedConfig,
+			);
+
+			await browserService.closePage(page);
+			return detailedData;
+		} catch (error) {
+			if (page) await browserService.closePage(page);
+			if (progressCallback) progressCallback({ etapa: "erro", pageNumber, error: error.message });
+			console.error("Erro ao fazer scraping de uma página do TJMG:", error);
+			return [];
+
 		} finally {
 			await browserService.closeBrowser();
 		}
@@ -124,6 +379,330 @@ export class ScrapingService {
 
 	/** Função principal que integra o scraping completo usando filas */
 	static async scrapeTJMG(exportId, progressCallback) {
+
 		// Executa de forma semelhante ao método ajustado acima, envolvendo processamento em paginação.
+
+		console.log("Iniciando scraping do TJMG...");
+
+		const exportRepo = new ExportRepository();
+		const exportData = await exportRepo.getById(exportId);
+
+		let page;
+		let totalPages = 1;
+		const browserService = new BrowserService();
+
+		try {
+			const mergedConfig = {
+				...config,
+				consulta: {
+					entidade: exportData.entity,
+					anoInicio: exportData.yearStart,
+					anoFim: exportData.yearEnd,
+					maxPages: exportData.maxPages,
+					ocultarFechados: exportData.hideClosed,
+				},
+			};
+
+			if (progressCallback) progressCallback({ etapa: "abrindo navegador", exportId });
+
+			page = await browserService.newPage({ headless: exportData.headless });
+
+			if (progressCallback) progressCallback({ etapa: "navegando", exportId });
+			console.log(`Navegando para ${mergedConfig.urls.tjmg}`);
+			await page.goto(mergedConfig.urls.tjmg, { waitUntil: "domcontentloaded" });
+
+			// Entidade (autocomplete)
+			if (progressCallback) progressCallback({ etapa: "preenchendo entidade", exportId });
+			await ScrapingService.pickAutocompleteByText(
+				page,
+				mergedConfig.selectors.tjmg.entidadeInput,
+				mergedConfig.selectors.tjmg.entidadeSuggestion,
+				mergedConfig.consulta.entidade,
+			);
+			await randomDelay(400, 900);
+
+			// Ano início
+			if (mergedConfig.consulta.anoInicio) {
+				if (progressCallback) progressCallback({ etapa: "preenchendo anoInicio", exportId });
+				await page.waitForSelector(mergedConfig.selectors.tjmg.anoInicioInput, { visible: true, timeout: 60000 });
+				await page.click(mergedConfig.selectors.tjmg.anoInicioInput, { clickCount: 3 });
+				await page.type(
+					mergedConfig.selectors.tjmg.anoInicioInput,
+					String(mergedConfig.consulta.anoInicio),
+					{ delay: 10 },
+				);
+			}
+
+			// Ano fim
+			if (mergedConfig.consulta.anoFim) {
+				if (progressCallback) progressCallback({ etapa: "preenchendo anoFim", exportId });
+				await page.waitForSelector(mergedConfig.selectors.tjmg.anoFimInput, { visible: true, timeout: 60000 });
+				await page.click(mergedConfig.selectors.tjmg.anoFimInput, { clickCount: 3 });
+				await page.type(
+					mergedConfig.selectors.tjmg.anoFimInput,
+					String(mergedConfig.consulta.anoFim),
+					{ delay: 10 },
+				);
+			}
+
+			// Consultar (NÃO usar Enter)
+			if (progressCallback) progressCallback({ etapa: "consultando", exportId });
+			await page.waitForSelector(mergedConfig.selectors.tjmg.consultarButton, { visible: true, timeout: 60000 });
+			await page.click(mergedConfig.selectors.tjmg.consultarButton);
+
+			// Esperar resultados
+			if (progressCallback) progressCallback({ etapa: "aguardando resultados", exportId });
+			console.log("Aguardando o carregamento dos resultados...");
+			await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, { visible: true, timeout: 60000 });
+			console.log("Tabela de resultados carregada com sucesso!");
+
+			// Ajusta paginação para 50, se existir
+			if (await page.$(mergedConfig.selectors.tjmg.paginatorSelection)) {
+				await page.evaluate(
+					(selector, value) => {
+						const el = document.querySelector(selector);
+						if (!el) return;
+						el.value = value;
+						const event = new Event("change", { bubbles: true });
+						el.dispatchEvent(event);
+					},
+					mergedConfig.selectors.tjmg.paginatorSelection,
+					"50",
+				);
+
+				await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			}
+
+			await page.waitForTimeout(800);
+
+			console.log("Aguardando renderizações adicionais (se houver)...");
+			await ScrapingService.waitPrimeFacesIdle(page, mergedConfig, 60000);
+			await page.waitForSelector(mergedConfig.selectors.tjmg.resultTable, { visible: true, timeout: 60000 });
+
+			try {
+				await page.waitForSelector(mergedConfig.selectors.tjmg.paginatorCurrent, { timeout: 15000 });
+
+				totalPages = await page.evaluate((selector) => {
+					const paginatorText = document.querySelector(selector)?.textContent || "";
+					const match = paginatorText.match(/Página \d+ de (\d+)/);
+					return match ? Number(match[1]) : 1;
+				}, mergedConfig.selectors.tjmg.paginatorCurrent);
+
+				console.log(`Encontradas ${totalPages} páginas de resultados.`);
+			} catch {
+				console.log("Não foi encontrada paginação. Assumindo página única.");
+				totalPages = 1;
+			}
+
+			if (mergedConfig.consulta.maxPages && mergedConfig.consulta.maxPages < totalPages) {
+				totalPages = mergedConfig.consulta.maxPages;
+			}
+		} catch (error) {
+			if (progressCallback) progressCallback({ etapa: "erro", exportId, error: error.message });
+			console.error("Erro ao descobrir o total de páginas:", error);
+
+			await exportRepo.createError(exportId, {
+				message: "Erro ao descobrir o total de páginas: " + error.message,
+				stack: error.stack,
+			});
+
+			throw error;
+		} finally {
+			if (page) await browserService.closePage(page);
+			await browserService.closeBrowser();
+		}
+
+		for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
+			if (progressCallback) progressCallback({ etapa: "disparando job página", exportId, pageNumber });
+			await QueueService.addJob(JOB_NAMES.SCRAPE_SINGLE_TJMG_PAGE, {
+				exportId: exportData.id,
+				pageNumber,
+			});
+			console.log(`Job para página ${pageNumber} adicionado à fila.`);
+		}
+
+		if (progressCallback) progressCallback({ etapa: "jobs disparados", exportId, totalPages });
+
+		await exportRepo.updateTotalPages(exportId, totalPages);
+
+		return exportData;
+	}
+
+	/**
+	 * Cria o export inicial e dispara o job de scraping completo.
+	 */
+	static async scrap(consulta) {
+		const exportRepo = new ExportRepository();
+		const exportData = await exportRepo.create({
+			entity: consulta.entidade,
+			yearStart: consulta.anoInicio,
+			yearEnd: consulta.anoFim,
+			maxPages: consulta.maxPages,
+			hideClosed: consulta.ocultarFechados,
+			headless: consulta.headless ?? true,
+		});
+
+		await QueueService.addJob(JOB_NAMES.SCRAPE_TJMG, { exportId: exportData.id });
+
+		return exportData.id;
+	}
+
+	/**
+	 * Para cada registro do TJMG, busca detalhes no PJE e preenche partyInfo.
+	 */
+	static async fetchPjeDetailsForTjmgRows(exportId, tjmgRows, browserService, progressCallback, config) {
+		if (!Array.isArray(tjmgRows) || tjmgRows.length === 0) return [];
+
+		const exportRepo = new ExportRepository();
+		const processes = [];
+
+		for (const row of tjmgRows) {
+			processes.push(async () => {
+				const numeroProcesso = row.numeroProcessoExecucao;
+				console.log(`Buscando detalhes do PJE para o processo: ${numeroProcesso}`);
+
+				if (!numeroProcesso) {
+					row.partyInfo = [];
+					return;
+				}
+
+				if (progressCallback) {
+					progressCallback({
+						etapa: "buscando detalhes PJE",
+						numeroProcesso,
+						descricao: `Buscando detalhes do processo ${numeroProcesso} no PJE...`,
+					});
+				}
+
+				let partyInfo = [];
+
+				try {
+					partyInfo = await ScrapingService._fetchPjePartyInfo(browserService, numeroProcesso, config);
+				} catch (error) {
+					await exportRepo.createError(exportId, {
+						message: `Erro ao buscar detalhes do PJE para o processo ${numeroProcesso}: ${error.message}`,
+						stack: error.stack,
+					});
+				}
+
+				row.partyInfo = partyInfo || [];
+				await randomDelay(500, 1200);
+			});
+		}
+
+		await runWithConcurrencyLimit(processes, 5);
+
+		return tjmgRows;
+	}
+
+	/**
+	 * Busca detalhes das partes de um processo no PJE.
+	 * Usa seletor mais robusto, independente do prefixo j_idXXX.
+	 */
+	static async _fetchPjePartyInfo(browserService, numeroProcesso, config) {
+		const numeroProcessoLimpo = numeroProcesso.replace(/\D/g, "");
+		if (!numeroProcessoLimpo || numeroProcessoLimpo.length < 5) {
+			console.log(`[PJE] Processo inválido ou muito curto: ${numeroProcesso}`);
+			return [];
+		}
+
+		let page = null;
+		try {
+			page = await browserService.newPage({ headless: config.browser.headless });
+
+			// Tela principal do PJE
+			await page.goto(config.urls.pje, { waitUntil: "domcontentloaded" });
+
+			// Se não tiver 20 dígitos, usa pesquisa livre
+			if (numeroProcessoLimpo.length !== 20) {
+				await page.waitForSelector(config.selectors.pje.livreRadioButton);
+				await page.click(config.selectors.pje.livreRadioButton);
+			}
+
+			await page.waitForSelector(config.selectors.pje.processoInput);
+			await page.type(config.selectors.pje.processoInput, applyProcessMask(numeroProcessoLimpo), { delay: 50 });
+			await page.keyboard.press("Enter");
+
+			// Ver detalhes
+			try {
+				await page.waitForSelector(config.selectors.pje.verDetalhesLink, { timeout: 5000 });
+			} catch {
+				console.log(`[PJE] Nenhum resultado encontrado para o processo ${numeroProcesso}.`);
+				return [];
+			}
+
+			const onclickAttribute = await page.$eval(config.selectors.pje.verDetalhesLink, (el) =>
+				el.getAttribute("onclick"),
+			);
+			const urlMatch = onclickAttribute.match(/'([^']+\.seam[^']+)'/);
+
+			if (!urlMatch || !urlMatch[1]) {
+				console.log("[PJE] Não foi possível extrair a URL de detalhes do processo.");
+				return [];
+			}
+
+			const relativeUrl = urlMatch[1];
+			const fullUrl = new URL(relativeUrl, config.urls.pje).href;
+			await page.goto(fullUrl, { waitUntil: "domcontentloaded" });
+
+			// ID dinâmico: pega qualquer elemento cujo id termine com esse sufixo
+			const containerSelector = '[id$="processoPartesPoloAtivoResumidoList"]';
+
+			try {
+				await page.waitForSelector(containerSelector, { timeout: 60000 });
+			} catch {
+				console.log(
+					`[PJE] Container de partes não encontrado para o processo ${numeroProcesso} (layout diferente ou sem partes).`,
+				);
+				return [];
+			}
+
+			const parties = await page.evaluate((selector) => {
+				const root = document.querySelector(selector);
+				if (!root) return [];
+
+				const rows = Array.from(root.querySelectorAll(".pje-parte-processual, tr"));
+				const parties = [];
+				let currentAuthor = null;
+
+				rows.forEach((row) => {
+					const nameElement = row.querySelector("span.text-bold") || row.querySelector("span");
+					if (!nameElement) return;
+
+					const nameText = nameElement.textContent.trim();
+					const roleMatch = nameText.match(/\((.*?)\)/);
+					if (!roleMatch) return;
+
+					const nameMatch = nameText.match(/^(.*?)-/);
+					const cpfMatch = nameText.match(/(?:CPF|CNPJ):\s*([\d./-]+)/);
+					const oabMatch = nameText.match(/OAB\s*([A-Z]{2}\d+)/);
+
+					const name = nameMatch ? nameMatch[1].trim() : nameText.split("(")[0].trim();
+					const cpf = cpfMatch ? cpfMatch[1].trim() : "";
+					const role = roleMatch ? roleMatch[1].trim() : "";
+					const oab = oabMatch ? oabMatch[1].trim() : "";
+
+					if (role !== "ADVOGADO") {
+						currentAuthor = { name, cpf_cnpj: cpf, role, lawyers: "" };
+						parties.push(currentAuthor);
+					} else if (role === "ADVOGADO" && currentAuthor) {
+						const lawyerInfo = `${name} (OAB: ${oab || "N/A"})`;
+						currentAuthor.lawyers += currentAuthor.lawyers ? `; ${lawyerInfo}` : lawyerInfo;
+					}
+				});
+
+				return parties;
+			}, containerSelector);
+
+			console.log(`[PJE] Partes extraídas para ${numeroProcesso}: ${JSON.stringify(parties)}`);
+			return parties;
+		} catch (err) {
+			console.error(`[PJE] Erro ao buscar detalhes do processo ${numeroProcesso}:`, err);
+			return [];
+		} finally {
+			// se quiser pode fechar a aba aqui:
+			// if (page && !page.isClosed()) await page.close();
+		}
 	}
 }
